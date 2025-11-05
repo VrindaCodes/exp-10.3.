@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Social Demo</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 10px; }
+    .card { border: 1px solid #ddd; padding: 10px; margin-bottom: 10px; border-radius: 6px; }
+    .row { display:flex; gap:10px; align-items:center; }
+    button{ cursor:pointer; }
+  </style>
+</head>
+<body>
+  <h1>Social Demo — Posts & Auth</h1>
+
+  <div id="auth" class="card">
+    <h3>Register / Login</h3>
+    <input id="reg_username" placeholder="username">
+    <input id="reg_email" placeholder="email">
+    <input id="reg_password" placeholder="password" type="password">
+    <button onclick="register()">Register</button>
+    <hr>
+    <input id="login_user" placeholder="email or username">
+    <input id="login_pass" placeholder="password" type="password">
+    <button onclick="login()">Login</button>
+    <div id="me"></div>
+  </div>
+
+  <div id="create" class="card" style="display:none;">
+    <h3>Create Post</h3>
+    <input id="post_title" placeholder="title" style="width:100%">
+    <textarea id="post_content" placeholder="content" style="width:100%;height:80px"></textarea>
+    <button onclick="createPost()">Create Post</button>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <h2>Feed</h2>
+  <div id="feed"></div>
+
+<script>
+const API = "http://localhost:4000/api";
+
+function setUserUI() {
+  const token = localStorage.getItem("token");
+  const meDiv = document.getElementById("me");
+  if (!token) {
+    meDiv.innerHTML = "<small>Not logged in</small>";
+    document.getElementById("create").style.display = "none";
+    return;
+  }
+  // token exists; show create
+  document.getElementById("create").style.display = "block";
+  // crude way: we stored user object when logging
+  const user = JSON.parse(localStorage.getItem("user") || "null");
+  meDiv.innerHTML = user ? `<b>${user.username}</b> (<small>${user.email}</small>)` : "Logged in";
+}
+
+async function register() {
+  const username = document.getElementById("reg_username").value;
+  const email = document.getElementById("reg_email").value;
+  const password = document.getElementById("reg_password").value;
+  const res = await fetch(API + "/auth/register", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ username, email, password })
+  });
+  const data = await res.json();
+  if (res.ok) {
+    localStorage.setItem("token", data.token);
+    localStorage.setItem("user", JSON.stringify(data.user));
+    alert("Registered & logged in");
+    setUserUI();
+    loadFeed();
+  } else alert(data.message || "Error");
+}
+
+async function login() {
+  const emailOrUsername = document.getElementById("login_user").value;
+  const password = document.getElementById("login_pass").value;
+  const res = await fetch(API + "/auth/login", {
+    method:"POST", headers:{"Content-Type":"application/json"},
+    body: JSON.stringify({ emailOrUsername, password })
+  });
+  const data = await res.json();
+  if (res.ok) {
+    localStorage.setItem("token", data.token);
+    localStorage.setItem("user", JSON.stringify(data.user));
+    alert("Logged in");
+    setUserUI();
+    loadFeed();
+  } else alert(data.message || "Error");
+}
+
+function logout() {
+  localStorage.removeItem("token");
+  localStorage.removeItem("user");
+  setUserUI();
+  alert("Logged out");
+}
+
+async function createPost() {
+  const title = document.getElementById("post_title").value;
+  const content = document.getElementById("post_content").value;
+  const token = localStorage.getItem("token");
+  const res = await fetch(API + "/posts", {
+    method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer " + token},
+    body: JSON.stringify({ title, content })
+  });
+  if (res.ok) {
+    document.getElementById("post_title").value = "";
+    document.getElementById("post_content").value = "";
+    loadFeed();
+  } else {
+    const d = await res.json();
+    alert(d.message || "Error");
+  }
+}
+
+async function loadFeed() {
+  const res = await fetch(API + "/posts");
+  const posts = await res.json();
+  const feed = document.getElementById("feed");
+  feed.innerHTML = "";
+  posts.forEach(p => {
+    const div = document.createElement("div");
+    div.className = "card";
+    div.innerHTML = `
+      <div style="display:flex;justify-content:space-between">
+        <div><b>${escapeHtml(p.title)}</b> — <small>by ${escapeHtml(p.author.username || "unknown")}</small></div>
+        <div><small>${new Date(p.createdAt).toLocaleString()}</small></div>
+      </div>
+      <p>${escapeHtml(p.content)}</p>
+      <div class="row">
+        <button onclick='toggleLike("${p.id}")'>Like (<span id="likes-${p.id}">${p.likes.length}</span>)</button>
+        <button onclick='showCommentBox("${p.id}")'>Comment</button>
+        <button onclick='viewPost("${p.id}")'>View</button>
+      </div>
+      <div id="comment-box-${p.id}" style="margin-top:8px;display:none;">
+        <input id="comment-input-${p.id}" placeholder="Write a comment" style="width:70%">
+        <button onclick='addComment("${p.id}")'>Send</button>
+      </div>
+      <div id="comments-${p.id}" style="margin-top:8px;"></div>
+    `;
+    feed.appendChild(div);
+    loadComments(p.id);
+  });
+}
+
+function showCommentBox(postId){
+  const el = document.getElementById("comment-box-" + postId);
+  el.style.display = el.style.display === "none" ? "block" : "none";
+}
+
+async function addComment(postId) {
+  const token = localStorage.getItem("token");
+  const text = document.getElementById("comment-input-" + postId).value;
+  if (!token) { alert("login first"); return; }
+  const res = await fetch(API + `/posts/${postId}/comments`, {
+    method:"POST", headers:{"Content-Type":"application/json","Authorization":"Bearer " + token},
+    body: JSON.stringify({ text })
+  });
+  if (res.ok) {
+    document.getElementById("comment-input-" + postId).value = "";
+    loadComments(postId);
+  } else {
+    const d = await res.json();
+    alert(d.message || "Error");
+  }
+}
+
+async function loadComments(postId) {
+  const res = await fetch(API + "/posts/" + postId);
+  if (!res.ok) return;
+  const data = await res.json();
+  const container = document.getElementById("comments-" + postId);
+  container.innerHTML = "";
+  (data.comments || []).slice(-5).reverse().forEach(c => {
+    const div = document.createElement("div");
+    div.style.fontSize = "0.9em";
+    div.style.paddingTop = "4px";
+    div.innerHTML = `<b>${escapeHtml(c.author.username)}</b>: ${escapeHtml(c.text)}`;
+    container.appendChild(div);
+  });
+  // update likes
+  const likesSpan = document.getElementById("likes-" + postId);
+  if (likesSpan) likesSpan.innerText = data.likes ? data.likes.length : 0;
+}
+
+async function toggleLike(postId) {
+  const token = localStorage.getItem("token");
+  if (!token) { alert("login to like"); return; }
+  const res = await fetch(API + `/posts/${postId}/like`, {
+    method:"POST", headers:{"Authorization":"Bearer " + token}
+  });
+  if (res.ok) {
+    const data = await res.json();
+    document.getElementById("likes-" + postId).innerText = data.likesCount;
+  }
+}
+
+async function viewPost(postId) {
+  const res = await fetch(API + "/posts/" + postId);
+  if (!res.ok) return alert("Cannot load post");
+  const data = await res.json();
+  alert(`${data.title}\n\nby ${data.author.username}\n\n${data.content}\n\nComments: ${data.comments.length}`);
+}
+
+function escapeHtml(s){ if(!s) return ""; return s.replaceAll("&", "&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;"); }
+
+setUserUI();
+loadFeed();
+</script>
+</body>
+</html>
